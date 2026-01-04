@@ -1,6 +1,7 @@
 import ray
 from ray.rllib.algorithms.ppo import PPOConfig
 import gymnasium as gym
+import torch
 
 # ===============================
 # Initialize Ray
@@ -21,9 +22,9 @@ config = (
     PPOConfig() #use PPO algo
     .environment(env="CartPole-v1")
     .framework("torch")
-    .rollouts(
-        num_rollout_workers=1,   # parallel env workers
-        rollout_fragment_length=200 #How long the dog plays before writing in the diary ,One diary page = 200 steps
+    .env_runners(     # NEW API (replaces .rollouts)
+        num_env_runners=1, # parallel env workers
+        rollout_fragment_length=200  #How long the dog plays before writing in the diary ,One diary page = 200 steps
     )
     .training(
         gamma=0.99, #How much the dog cares about future treats
@@ -41,13 +42,10 @@ algo = config.build()
 # ===============================
 # Training Loop
 # ===============================
-for i in range(30): # 30 times 4000 steps
+for i in range(30):
     result = algo.train()
-    print(
-        f"Iter {i} | "
-        f"Reward Mean: {result['episode_reward_mean']:.2f}"
-    )
-
+    reward_mean = result["env_runners"]["episode_return_mean"]
+    print(f"Iter {i} | Reward Mean: {reward_mean:.2f}")
 # ===============================
 # Save Model
 # ===============================
@@ -59,11 +57,24 @@ print("✅ Model saved at:", checkpoint)
 # ===============================
 env = gym.make("CartPole-v1", render_mode="human")
 obs, _ = env.reset()
-done = False
 
+# Get the trained module (NEW API)
+module = algo.get_module()
+
+done = False
 while not done:
-    action = algo.compute_single_action(obs)
+    # RLlib expects a dict input
+    input_dict = {
+        "obs": torch.tensor(obs).unsqueeze(0)
+    }
+
+    # Forward pass (inference)
+    output = module.forward_inference(input_dict)
+
+    # Extract action
+    logits = output["action_dist_inputs"]
+    action = torch.argmax(logits, dim=-1).item()
+
     obs, reward, done, truncated, _ = env.step(action)
 
 env.close()
-ray.shutdown()
